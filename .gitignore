@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+.env.local
+
+# Credentials (never commit)
+credentials/
+secrets/
+*.p8
+*.p12
+
+# IDE
+.vscode/
+.idea/
+
+# uv
+.python-version

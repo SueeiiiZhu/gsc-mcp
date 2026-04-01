@@ -352,10 +352,15 @@ def _build_sse_app(mcp_path: str = "/sse"):
 
 
 def _build_streamable_http_app(mcp_path: str = "/mcp"):
-    """Build a Starlette app with Streamable HTTP transport."""
-    from starlette.applications import Starlette
+    """Build a raw ASGI app with Streamable HTTP transport.
+
+    Uses a raw ASGI handler instead of Starlette's endpoint pattern because
+    ``transport.handle_request`` sends responses directly via the ASGI ``send``
+    callable, which is incompatible with Starlette's ``request_response``
+    wrapper that expects a ``Response`` return value.
+    """
     from starlette.requests import Request
-    from starlette.routing import Route
+    from starlette.responses import Response
 
     from mcp.server.streamable_http import StreamableHTTPServerTransport
 
@@ -384,10 +389,32 @@ def _build_streamable_http_app(mcp_path: str = "/mcp"):
             _sessions.pop(session_id, None)
             _tasks.pop(session_id, None)
 
-    async def handle_mcp(request: Request):
-        scope = request.scope
-        receive = request.receive
-        send = request._send
+    async def app(scope, receive, send):
+        if scope["type"] == "lifespan":
+            while True:
+                msg = await receive()
+                if msg["type"] == "lifespan.startup":
+                    await send({"type": "lifespan.startup.complete"})
+                elif msg["type"] == "lifespan.shutdown":
+                    await send({"type": "lifespan.shutdown.complete"})
+                    return
+            return
+
+        if scope["type"] != "http":
+            return
+
+        request = Request(scope, receive, send)
+
+        if scope["path"] != mcp_path:
+            resp = Response("Not Found", status_code=404)
+            await resp(scope, receive, send)
+            return
+
+        if request.method not in ("GET", "POST", "DELETE"):
+            resp = Response("Method Not Allowed", status_code=405)
+            await resp(scope, receive, send)
+            return
+
         session_id = request.headers.get("mcp-session-id")
 
         if request.method == "GET":
@@ -430,11 +457,10 @@ def _build_streamable_http_app(mcp_path: str = "/mcp"):
                     task.cancel()
                 return
 
-    return Starlette(
-        routes=[
-            Route(mcp_path, endpoint=handle_mcp, methods=["GET", "POST", "DELETE"]),
-        ],
-    )
+        resp = Response("Bad Request", status_code=400)
+        await resp(scope, receive, send)
+
+    return app
 
 
 # ---------------------------------------------------------------------------

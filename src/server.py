@@ -355,19 +355,20 @@ def _build_streamable_http_app(mcp_path: str = "/mcp"):
     """Build a Starlette app with Streamable HTTP transport."""
     from starlette.applications import Starlette
     from starlette.requests import Request
-    from starlette.routing import Mount
+    from starlette.routing import Route
 
     from mcp.server.streamable_http import StreamableHTTPServerTransport
 
     # Session management: one transport per session
     _sessions: dict[str, StreamableHTTPServerTransport] = {}
 
-    async def handle_mcp(scope, receive, send):
-        request = Request(scope, receive, send)
+    async def handle_mcp(request: Request):
+        scope = request.scope
+        receive = request.receive
+        send = request._send
         session_id = request.headers.get("mcp-session-id")
 
         if request.method == "GET":
-            # GET = new SSE stream for an existing session (or standalone)
             if session_id and session_id in _sessions:
                 transport = _sessions[session_id]
                 await transport.handle_request(scope, receive, send)
@@ -404,7 +405,7 @@ def _build_streamable_http_app(mcp_path: str = "/mcp"):
 
     return Starlette(
         routes=[
-            Mount(mcp_path, app=handle_mcp),
+            Route(mcp_path, endpoint=handle_mcp, methods=["GET", "POST", "DELETE"]),
         ],
     )
 

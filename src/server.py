@@ -1,8 +1,10 @@
-"""GSC MCP Server — stdio transport entry point."""
+"""GSC MCP Server — supports stdio, SSE, and Streamable HTTP transports."""
 
+import argparse
 import asyncio
 import json
 import logging
+import uuid
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -362,11 +364,11 @@ async def call_tool(name: str, arguments: dict):
 
 
 # ---------------------------------------------------------------------------
-# Entry point
+# Transport helpers
 # ---------------------------------------------------------------------------
 
 
-async def _main_async():
+async def _run_stdio():
     async with stdio_server() as (read_stream, write_stream):
         await mcp.run(
             read_stream,
@@ -375,8 +377,147 @@ async def _main_async():
         )
 
 
+def _build_sse_app(mcp_path: str = "/sse"):
+    """Build a Starlette app with SSE transport."""
+    from starlette.applications import Starlette
+    from starlette.routing import Mount, Route
+
+    from mcp.server.sse import SseServerTransport
+
+    sse_transport = SseServerTransport(f"{mcp_path}/messages/")
+
+    async def handle_sse(request):
+        async with sse_transport.connect_sse(
+            request.scope, request.receive, request._send
+        ) as (read_stream, write_stream):
+            await mcp.run(
+                read_stream,
+                write_stream,
+                mcp.create_initialization_options(),
+            )
+
+    return Starlette(
+        routes=[
+            Route(mcp_path, endpoint=handle_sse),
+            Mount(f"{mcp_path}/messages/", app=sse_transport.handle_post_message),
+        ],
+    )
+
+
+def _build_streamable_http_app(mcp_path: str = "/mcp"):
+    """Build a Starlette app with Streamable HTTP transport."""
+    from starlette.applications import Starlette
+    from starlette.requests import Request
+    from starlette.routing import Mount
+
+    from mcp.server.streamable_http import StreamableHTTPServerTransport
+
+    # Session management: one transport per session
+    _sessions: dict[str, StreamableHTTPServerTransport] = {}
+
+    async def handle_mcp(scope, receive, send):
+        request = Request(scope, receive, send)
+        session_id = request.headers.get("mcp-session-id")
+
+        if request.method == "GET":
+            # GET = new SSE stream for an existing session (or standalone)
+            if session_id and session_id in _sessions:
+                transport = _sessions[session_id]
+                await transport.handle_request(scope, receive, send)
+                return
+
+        if request.method == "POST":
+            if session_id and session_id in _sessions:
+                transport = _sessions[session_id]
+                await transport.handle_request(scope, receive, send)
+                return
+
+            # New session
+            new_session_id = str(uuid.uuid4())
+            transport = StreamableHTTPServerTransport(
+                mcp_session_id=new_session_id,
+                is_json_response_enabled=True,
+            )
+            _sessions[new_session_id] = transport
+
+            async with transport.connect() as (read_stream, write_stream):
+                await transport.handle_request(scope, receive, send)
+                await mcp.run(
+                    read_stream,
+                    write_stream,
+                    mcp.create_initialization_options(),
+                )
+
+        if request.method == "DELETE":
+            if session_id and session_id in _sessions:
+                transport = _sessions.pop(session_id)
+                transport.terminate()
+                await transport.handle_request(scope, receive, send)
+                return
+
+    return Starlette(
+        routes=[
+            Mount(mcp_path, app=handle_mcp),
+        ],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+
+def _parse_args():
+    parser = argparse.ArgumentParser(description="GSC MCP Server")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "sse", "streamable-http"],
+        default="stdio",
+        help="Transport protocol (default: stdio)",
+    )
+    parser.add_argument(
+        "--host",
+        default="0.0.0.0",
+        help="Host to bind for HTTP transports (default: 0.0.0.0)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port to bind for HTTP transports (default: 8000)",
+    )
+    parser.add_argument(
+        "--path",
+        default=None,
+        help="URL path prefix (default: /sse for SSE, /mcp for Streamable HTTP)",
+    )
+    return parser.parse_args()
+
+
 def main():
-    asyncio.run(_main_async())
+    args = _parse_args()
+
+    if args.transport == "stdio":
+        asyncio.run(_run_stdio())
+    elif args.transport == "sse":
+        import uvicorn
+
+        path = args.path or "/sse"
+        app = _build_sse_app(mcp_path=path)
+        logger.info("Starting SSE transport on %s:%d%s", args.host, args.port, path)
+        uvicorn.run(app, host=args.host, port=args.port)
+    elif args.transport == "streamable-http":
+        import uvicorn
+
+        path = args.path or "/mcp"
+        app = _build_streamable_http_app(mcp_path=path)
+        logger.info(
+            "Starting Streamable HTTP transport on %s:%d%s",
+            args.host,
+            args.port,
+            path,
+        )
+        uvicorn.run(app, host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

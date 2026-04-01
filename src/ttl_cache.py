@@ -6,17 +6,20 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable, Hashable
 from dataclasses import dataclass
+from typing import Generic, TypeVar
+
+T = TypeVar("T")
 
 _MISSING = object()
 
 
 @dataclass
-class _CacheEntry[T]:
+class _CacheEntry(Generic[T]):
     value: T
     expires_at: float
 
 
-class TTLCache[T]:
+class TTLCache(Generic[T]):
     """Async-safe in-memory TTL cache for simple server-local values."""
 
     def __init__(self) -> None:

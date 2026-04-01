@@ -363,10 +363,15 @@ def _build_streamable_http_app(mcp_path: str = "/mcp"):
     _sessions: dict[str, StreamableHTTPServerTransport] = {}
     _tasks: dict[str, asyncio.Task] = {}
 
-    async def _run_mcp_session(transport: StreamableHTTPServerTransport, session_id: str):
+    async def _run_mcp_session(
+        transport: StreamableHTTPServerTransport,
+        session_id: str,
+        ready_event: asyncio.Event,
+    ):
         """Run mcp.run in background for the lifetime of a session."""
         try:
             async with transport.connect() as (read_stream, write_stream):
+                ready_event.set()
                 await mcp.run(
                     read_stream,
                     write_stream,
@@ -375,6 +380,7 @@ def _build_streamable_http_app(mcp_path: str = "/mcp"):
         except Exception:
             logger.exception("MCP session %s crashed", session_id)
         finally:
+            ready_event.set()  # unblock waiters even on failure
             _sessions.pop(session_id, None)
             _tasks.pop(session_id, None)
 
@@ -403,11 +409,13 @@ def _build_streamable_http_app(mcp_path: str = "/mcp"):
                 is_json_response_enabled=True,
             )
             _sessions[new_session_id] = transport
+            ready_event = asyncio.Event()
             _tasks[new_session_id] = asyncio.create_task(
-                _run_mcp_session(transport, new_session_id)
+                _run_mcp_session(transport, new_session_id, ready_event)
             )
 
-            # Now handle this request (initialize) — mcp.run is consuming in background
+            # Wait for transport.connect() to finish before handling the request
+            await ready_event.wait()
             await transport.handle_request(scope, receive, send)
             return
 

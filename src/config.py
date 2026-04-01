@@ -28,8 +28,14 @@ class Settings(BaseSettings):
     site_url_firstorder: str = ""
     site_url_cubesolver: str = ""
 
-    # Credentials directory
+    # Credentials directory (file-based fallback)
     credentials_dir: Path = Path("credentials")
+
+    # Per-brand service account JSON via env var (takes precedence over file)
+    google_credentials_boostvision: str = ""
+    google_credentials_pigeoncast: str = ""
+    google_credentials_firstorder: str = ""
+    google_credentials_cubesolver: str = ""
 
     @field_validator("google_access_token_ttl_seconds")
     @classmethod
@@ -45,6 +51,15 @@ class Settings(BaseSettings):
             "pigeoncast": self.proxy_pigeoncast,
             "firstorder": self.proxy_firstorder,
             "cubesolver": self.proxy_cubesolver,
+        }[brand]
+
+    def google_credentials_for(self, brand: Brand) -> str:
+        """Return raw JSON string for the brand, or empty string if not set."""
+        return {
+            "boostvision": self.google_credentials_boostvision,
+            "pigeoncast": self.google_credentials_pigeoncast,
+            "firstorder": self.google_credentials_firstorder,
+            "cubesolver": self.google_credentials_cubesolver,
         }[brand]
 
     def site_url_for(self, brand: Brand) -> str:

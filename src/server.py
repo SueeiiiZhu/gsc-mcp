@@ -10,7 +10,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
-from src.config import BRANDS, Brand, settings
+from src.config import settings
 from src.proxy_router import get_exit_ip
 from src.tools import search_analytics, sitemaps, url_inspection
 
@@ -18,8 +18,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 mcp = Server("gsc-mcp")
-
-_BRAND_ENUM = list(BRANDS)
 
 # ---------------------------------------------------------------------------
 # Tool definitions
@@ -29,19 +27,12 @@ TOOLS: list[Tool] = [
     Tool(
         name="gsc_health_check",
         description=(
-            "Check proxy connectivity and reveal the exit IP for a brand. "
-            "If no proxy is configured, returns the local machine's public IP. "
-            "Use this to verify that traffic exits from the expected VPS IP."
+            "Check proxy connectivity and reveal the exit IP. "
+            "If no proxy is configured, returns the local machine's public IP."
         ),
         inputSchema={
             "type": "object",
-            "properties": {
-                "brand": {
-                    "type": "string",
-                    "enum": _BRAND_ENUM,
-                    "description": "Brand identifier. Omit to use default.",
-                },
-            },
+            "properties": {},
             "required": [],
         },
     ),
@@ -58,19 +49,11 @@ TOOLS: list[Tool] = [
         inputSchema={
             "type": "object",
             "properties": {
-                "brand": {
-                    "type": "string",
-                    "enum": _BRAND_ENUM,
-                    "description": (
-                        "Brand identifier. "
-                        "Omit to use GSC_DEFAULT_BRAND."
-                    ),
-                },
                 "siteUrl": {
                     "type": "string",
                     "description": (
                         "GSC site URL, e.g. 'sc-domain:example.com'. "
-                        "Omit to use the brand's configured default."
+                        "Omit to use SITE_URL from env."
                     ),
                 },
                 "startDate": {
@@ -178,20 +161,13 @@ TOOLS: list[Tool] = [
         inputSchema={
             "type": "object",
             "properties": {
-                "brand": {
-                    "type": "string",
-                    "enum": _BRAND_ENUM,
-                    "description": "Brand identifier. Omit to use default.",
-                },
                 "inspectionUrl": {
                     "type": "string",
                     "description": "The full URL to inspect.",
                 },
                 "siteUrl": {
                     "type": "string",
-                    "description": (
-                        "GSC site URL. Omit to use brand default."
-                    ),
+                    "description": "GSC site URL. Omit to use SITE_URL from env.",
                 },
                 "languageCode": {
                     "type": "string",
@@ -211,14 +187,9 @@ TOOLS: list[Tool] = [
         inputSchema={
             "type": "object",
             "properties": {
-                "brand": {
-                    "type": "string",
-                    "enum": _BRAND_ENUM,
-                    "description": "Brand identifier. Omit to use default.",
-                },
                 "siteUrl": {
                     "type": "string",
-                    "description": "GSC site URL. Omit to use brand default.",
+                    "description": "GSC site URL. Omit to use SITE_URL from env.",
                 },
             },
             "required": [],
@@ -233,14 +204,9 @@ TOOLS: list[Tool] = [
         inputSchema={
             "type": "object",
             "properties": {
-                "brand": {
-                    "type": "string",
-                    "enum": _BRAND_ENUM,
-                    "description": "Brand identifier. Omit to use default.",
-                },
                 "siteUrl": {
                     "type": "string",
-                    "description": "GSC site URL. Omit to use brand default.",
+                    "description": "GSC site URL. Omit to use SITE_URL from env.",
                 },
                 "sitemapUrl": {
                     "type": "string",
@@ -260,28 +226,15 @@ TOOLS: list[Tool] = [
 # ---------------------------------------------------------------------------
 
 
-def _resolve_brand(arguments: dict) -> Brand:
-    """Resolve brand from arguments or default config."""
-    brand = arguments.get("brand", "")
-    if not brand:
-        brand = settings.gsc_default_brand
-    if brand not in BRANDS:
-        raise ValueError(
-            f"Unknown brand {brand!r}. Must be one of {BRANDS}. "
-            f"Set 'brand' parameter or GSC_DEFAULT_BRAND env var."
-        )
-    return brand  # type: ignore[return-value]
-
-
-def _resolve_site_url(brand: Brand, arguments: dict) -> str:
-    """Resolve site URL from arguments or brand default."""
+def _resolve_site_url(arguments: dict) -> str:
+    """Resolve site URL from arguments or env config."""
     site_url = arguments.get("siteUrl", "")
     if not site_url:
-        site_url = settings.site_url_for(brand)
+        site_url = settings.site_url
     if not site_url:
         raise ValueError(
-            f"No site URL provided and no default configured for {brand!r}. "
-            f"Set 'siteUrl' parameter or SITE_URL_{brand.upper()} env var."
+            "No site URL provided. "
+            "Set 'siteUrl' parameter or SITE_URL env var."
         )
     return site_url
 
@@ -299,31 +252,28 @@ async def list_tools() -> list[Tool]:
 @mcp.call_tool()
 async def call_tool(name: str, arguments: dict):
     try:
-        brand = _resolve_brand(arguments)
-        exit_ip = await get_exit_ip(brand)
-        logger.info("[%s] exit IP: %s", brand, exit_ip)
+        exit_ip = await get_exit_ip()
+        logger.info("exit IP: %s", exit_ip)
 
         if name == "gsc_health_check":
             from src.proxy_router import get_client
 
-            proxy_url = settings.proxy_for(brand)
-            async with get_client(brand, timeout=10) as client:
+            proxy_url = settings.proxy_url
+            async with get_client(timeout=10) as client:
                 r = await client.get("https://httpbin.org/ip")
                 r.raise_for_status()
                 exit_ip = r.json().get("origin", "unknown")
             result = {
-                "brand": brand,
                 "proxyConfigured": bool(proxy_url),
                 "proxyUrl": proxy_url[:proxy_url.index("@") + 1] + "***" if proxy_url and "@" in proxy_url else proxy_url or "none",
                 "exitIp": exit_ip,
             }
             return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
-        site_url = _resolve_site_url(brand, arguments)
+        site_url = _resolve_site_url(arguments)
 
         if name == "gsc_search_analytics":
             result = await search_analytics.search_analytics(
-                brand=brand,
                 site_url=site_url,
                 start_date=arguments["startDate"],
                 end_date=arguments["endDate"],
@@ -336,19 +286,16 @@ async def call_tool(name: str, arguments: dict):
             )
         elif name == "gsc_inspect_url":
             result = await url_inspection.inspect_url(
-                brand=brand,
                 inspection_url=arguments["inspectionUrl"],
                 site_url=site_url,
                 language_code=arguments.get("languageCode", "en"),
             )
         elif name == "gsc_list_sitemaps":
             result = await sitemaps.list_sitemaps(
-                brand=brand,
                 site_url=site_url,
             )
         elif name == "gsc_submit_sitemap":
             result = await sitemaps.submit_sitemap(
-                brand=brand,
                 site_url=site_url,
                 sitemap_url=arguments["sitemapUrl"],
             )

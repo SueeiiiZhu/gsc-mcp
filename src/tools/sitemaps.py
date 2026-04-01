@@ -2,7 +2,6 @@
 
 from urllib.parse import quote
 
-from src.config import Brand
 from src.credentials import load_service_account
 from src.google_auth import get_google_access_token
 from src.proxy_router import get_client, safe_json
@@ -12,16 +11,16 @@ _SCOPE_READWRITE = "https://www.googleapis.com/auth/webmasters"
 _GSC_BASE = "https://www.googleapis.com/webmasters/v3"
 
 
-async def list_sitemaps(brand: Brand, site_url: str) -> dict:
+async def list_sitemaps(site_url: str) -> dict:
     """List all sitemaps submitted for a site."""
-    sa_info = load_service_account(brand)
-    token = await get_google_access_token(brand, sa_info, _SCOPE_READONLY)
+    sa_info = load_service_account()
+    token = await get_google_access_token(sa_info, _SCOPE_READONLY)
 
     encoded_site = quote(site_url, safe="")
     url = f"{_GSC_BASE}/sites/{encoded_site}/sitemaps"
     headers = {"Authorization": f"Bearer {token}"}
 
-    async with get_client(brand, timeout=30) as client:
+    async with get_client(timeout=30) as client:
         r = await client.get(url, headers=headers)
         r.raise_for_status()
         raw = safe_json(r)
@@ -51,17 +50,17 @@ async def list_sitemaps(brand: Brand, site_url: str) -> dict:
     return {"siteUrl": site_url, "sitemapCount": len(sitemaps), "sitemaps": sitemaps}
 
 
-async def submit_sitemap(brand: Brand, site_url: str, sitemap_url: str) -> dict:
+async def submit_sitemap(site_url: str, sitemap_url: str) -> dict:
     """Submit a sitemap for a site. Requires read-write scope."""
-    sa_info = load_service_account(brand)
-    token = await get_google_access_token(brand, sa_info, _SCOPE_READWRITE)
+    sa_info = load_service_account()
+    token = await get_google_access_token(sa_info, _SCOPE_READWRITE)
 
     encoded_site = quote(site_url, safe="")
     encoded_sitemap = quote(sitemap_url, safe="")
     url = f"{_GSC_BASE}/sites/{encoded_site}/sitemaps/{encoded_sitemap}"
     headers = {"Authorization": f"Bearer {token}"}
 
-    async with get_client(brand, timeout=30) as client:
+    async with get_client(timeout=30) as client:
         r = await client.put(url, headers=headers)
         r.raise_for_status()
 

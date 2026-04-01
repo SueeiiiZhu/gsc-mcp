@@ -2,7 +2,6 @@
 
 from urllib.parse import quote
 
-from src.config import Brand
 from src.credentials import load_service_account
 from src.google_auth import get_google_access_token
 from src.proxy_router import get_client, safe_json
@@ -13,7 +12,6 @@ _MAX_ROWS_PER_PAGE = 25_000
 
 
 async def search_analytics(
-    brand: Brand,
     site_url: str,
     start_date: str,
     end_date: str,
@@ -32,8 +30,8 @@ async def search_analytics(
     if dimensions is None:
         dimensions = ["query", "page", "date"]
 
-    sa_info = load_service_account(brand)
-    token = await get_google_access_token(brand, sa_info, _SCOPE)
+    sa_info = load_service_account()
+    token = await get_google_access_token(sa_info, _SCOPE)
 
     encoded_site = quote(site_url, safe="")
     url = f"{_GSC_BASE}/sites/{encoded_site}/searchAnalytics/query"
@@ -42,7 +40,7 @@ async def search_analytics(
     all_rows: list[dict] = []
     start_row = 0
 
-    async with get_client(brand, timeout=60) as client:
+    async with get_client(timeout=60) as client:
         while True:
             fetch_count = (
                 min(row_limit - len(all_rows), _MAX_ROWS_PER_PAGE)

@@ -1,6 +1,6 @@
-"""brand → VPS proxy routing.
+"""Proxy routing for Google API requests.
 
-If a proxy is configured for the brand, all requests go through it.
+If PROXY_URL is configured, all requests go through it.
 Otherwise requests go direct.
 """
 
@@ -8,7 +8,7 @@ import json
 
 import httpx
 
-from src.config import Brand, settings
+from src.config import settings
 from src.ttl_cache import TTLCache
 
 _IP_CACHE: TTLCache[str] = TTLCache()
@@ -27,22 +27,21 @@ def safe_json(response: httpx.Response) -> dict | list:
         ) from e
 
 
-def get_client(brand: Brand, **kwargs) -> httpx.AsyncClient:
-    """Return an httpx.AsyncClient, optionally routed through the brand's VPS proxy."""
-    proxy_url = settings.proxy_for(brand)
-    if proxy_url:
-        return httpx.AsyncClient(proxy=proxy_url, **kwargs)
+def get_client(**kwargs) -> httpx.AsyncClient:
+    """Return an httpx.AsyncClient, optionally routed through the configured proxy."""
+    if settings.proxy_url:
+        return httpx.AsyncClient(proxy=settings.proxy_url, **kwargs)
     return httpx.AsyncClient(**kwargs)
 
 
-async def get_exit_ip(brand: Brand) -> str:
-    """Return the exit IP for the brand's proxy, cached for 5 minutes."""
+async def get_exit_ip() -> str:
+    """Return the exit IP, cached for 5 minutes."""
     async def _fetch() -> str:
-        async with get_client(brand, timeout=10) as client:
+        async with get_client(timeout=10) as client:
             try:
                 r = await client.get("https://httpbin.org/ip")
                 return r.json().get("origin", "unknown")
             except Exception:
                 return "unknown"
 
-    return await _IP_CACHE.get_or_set(brand, _IP_TTL, _fetch)
+    return await _IP_CACHE.get_or_set("exit_ip", _IP_TTL, _fetch)

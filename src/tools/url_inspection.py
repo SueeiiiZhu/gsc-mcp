@@ -1,6 +1,5 @@
 """Google Search Console URL Inspection API."""
 
-from src.config import Brand
 from src.credentials import load_service_account
 from src.google_auth import get_google_access_token
 from src.proxy_router import get_client, safe_json
@@ -10,7 +9,6 @@ _INSPECT_URL = "https://searchconsole.googleapis.com/v1/urlInspection/index:insp
 
 
 async def inspect_url(
-    brand: Brand,
     inspection_url: str,
     site_url: str,
     language_code: str = "en",
@@ -19,12 +17,12 @@ async def inspect_url(
 
     Rate limit: 2,000 inspections/day per site, 600/minute.
     """
-    sa_info = load_service_account(brand)
-    token = await get_google_access_token(brand, sa_info, _SCOPE)
+    sa_info = load_service_account()
+    token = await get_google_access_token(sa_info, _SCOPE)
 
     headers = {"Authorization": f"Bearer {token}"}
 
-    async with get_client(brand, timeout=30) as client:
+    async with get_client(timeout=30) as client:
         r = await client.post(
             _INSPECT_URL,
             headers=headers,

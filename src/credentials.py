@@ -1,34 +1,32 @@
-"""Load brand-specific credentials from env var or CREDENTIALS_DIR.
+"""Load service account credentials from env var or file.
 
 Resolution order:
-  1. GOOGLE_CREDENTIALS_{BRAND} env var (JSON string)
-  2. File at {CREDENTIALS_DIR}/{brand}/{filename}
+  1. GOOGLE_CREDENTIALS env var (JSON string)
+  2. GOOGLE_CREDENTIALS_FILE env var (path to JSON file)
 """
 
 import json
-from pathlib import Path
 
-from src.config import Brand, settings
-
-
-def credentials_path(brand: Brand, filename: str) -> Path:
-    return settings.credentials_dir / brand / filename
+from src.config import settings
 
 
-def load_service_account(brand: Brand, filename: str = "gsc.json") -> dict:
-    """Load a Google Service Account JSON for the given brand."""
-    # 1. Try env var
-    raw = settings.google_credentials_for(brand)
-    if raw:
-        return json.loads(raw)
+def load_service_account() -> dict:
+    """Load the Google Service Account JSON."""
+    # 1. JSON string from env var
+    if settings.google_credentials:
+        return json.loads(settings.google_credentials)
 
-    # 2. Fall back to file
-    path = credentials_path(brand, filename)
-    if not path.exists():
-        raise FileNotFoundError(
-            f"Service account not found for brand {brand!r}. "
-            f"Set GOOGLE_CREDENTIALS_{brand.upper()} env var "
-            f"or place JSON file at {path}"
-        )
-    with path.open() as f:
-        return json.load(f)
+    # 2. File path
+    if settings.google_credentials_file:
+        path = settings.google_credentials_file
+        if not path.exists():
+            raise FileNotFoundError(
+                f"Service account file not found: {path}"
+            )
+        with path.open() as f:
+            return json.load(f)
+
+    raise RuntimeError(
+        "No credentials configured. "
+        "Set GOOGLE_CREDENTIALS (JSON string) or GOOGLE_CREDENTIALS_FILE (path)."
+    )

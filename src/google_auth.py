@@ -1,14 +1,14 @@
-"""Google Service Account OAuth2 token exchange via VPS proxy.
+"""Google Service Account OAuth2 token exchange.
 
-Token exchange itself goes through the brand's VPS proxy so the auth
-request also exits from the correct residential IP.
+Token exchange optionally goes through the configured proxy so the auth
+request exits from the expected IP.
 """
 
 import time
 
 import jwt  # PyJWT
 
-from src.config import Brand, settings
+from src.config import settings
 from src.proxy_router import get_client, safe_json
 from src.ttl_cache import TTLCache
 
@@ -16,28 +16,25 @@ _TOKEN_URL = "https://oauth2.googleapis.com/token"
 _TOKEN_CACHE = TTLCache[str]()
 
 
-async def get_google_access_token(brand: Brand, sa_info: dict, scope: str) -> str:
+async def get_google_access_token(sa_info: dict, scope: str) -> str:
     """Exchange a Service Account JSON for a short-lived access token.
 
     Args:
-        brand: Brand identifier — determines which VPS proxy is used.
         sa_info: Parsed Google Service Account JSON dict.
         scope: OAuth2 scope string.
 
     Returns:
         Bearer access token (valid ~1 hour).
     """
-    cache_key = ("sa", brand, sa_info["client_email"], scope)
+    cache_key = ("sa", sa_info["client_email"], scope)
     return await _TOKEN_CACHE.get_or_set(
         cache_key,
         settings.google_access_token_ttl_seconds,
-        lambda: _exchange_service_account_token(brand, sa_info, scope),
+        lambda: _exchange_service_account_token(sa_info, scope),
     )
 
 
-async def _exchange_service_account_token(
-    brand: Brand, sa_info: dict, scope: str
-) -> str:
+async def _exchange_service_account_token(sa_info: dict, scope: str) -> str:
     now = int(time.time())
     assertion = jwt.encode(
         {
@@ -51,7 +48,7 @@ async def _exchange_service_account_token(
         algorithm="RS256",
         headers={"kid": sa_info["private_key_id"]},
     )
-    async with get_client(brand, timeout=15) as client:
+    async with get_client(timeout=15) as client:
         r = await client.post(
             _TOKEN_URL,
             data={

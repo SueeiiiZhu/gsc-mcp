@@ -359,8 +359,24 @@ def _build_streamable_http_app(mcp_path: str = "/mcp"):
 
     from mcp.server.streamable_http import StreamableHTTPServerTransport
 
-    # Session management: one transport per session
+    # Session management: transport + background mcp.run task per session
     _sessions: dict[str, StreamableHTTPServerTransport] = {}
+    _tasks: dict[str, asyncio.Task] = {}
+
+    async def _run_mcp_session(transport: StreamableHTTPServerTransport, session_id: str):
+        """Run mcp.run in background for the lifetime of a session."""
+        try:
+            async with transport.connect() as (read_stream, write_stream):
+                await mcp.run(
+                    read_stream,
+                    write_stream,
+                    mcp.create_initialization_options(),
+                )
+        except Exception:
+            logger.exception("MCP session %s crashed", session_id)
+        finally:
+            _sessions.pop(session_id, None)
+            _tasks.pop(session_id, None)
 
     async def handle_mcp(request: Request):
         scope = request.scope
@@ -380,27 +396,30 @@ def _build_streamable_http_app(mcp_path: str = "/mcp"):
                 await transport.handle_request(scope, receive, send)
                 return
 
-            # New session
+            # New session: create transport, start mcp.run in background
             new_session_id = str(uuid.uuid4())
             transport = StreamableHTTPServerTransport(
                 mcp_session_id=new_session_id,
                 is_json_response_enabled=True,
             )
             _sessions[new_session_id] = transport
+            _tasks[new_session_id] = asyncio.create_task(
+                _run_mcp_session(transport, new_session_id)
+            )
 
-            async with transport.connect() as (read_stream, write_stream):
-                await transport.handle_request(scope, receive, send)
-                await mcp.run(
-                    read_stream,
-                    write_stream,
-                    mcp.create_initialization_options(),
-                )
+            # Now handle this request (initialize) — mcp.run is consuming in background
+            await transport.handle_request(scope, receive, send)
+            return
 
         if request.method == "DELETE":
             if session_id and session_id in _sessions:
-                transport = _sessions.pop(session_id)
-                transport.terminate()
-                await transport.handle_request(scope, receive, send)
+                transport = _sessions.pop(session_id, None)
+                task = _tasks.pop(session_id, None)
+                if transport:
+                    transport.terminate()
+                    await transport.handle_request(scope, receive, send)
+                if task:
+                    task.cancel()
                 return
 
     return Starlette(
